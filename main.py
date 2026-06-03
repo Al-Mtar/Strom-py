@@ -13,5 +13,4 @@ date = response.json()
 
 st.write("Current Date:")
 st.write(date["current"])
-st.write(data)
-
+st.write(date)

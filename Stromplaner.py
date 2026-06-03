@@ -2,11 +2,12 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import datetime
+from pathlib import Path
 
 # =========================
 # CONFIG
 # =========================
-DB_PATH = "pro_strom.db"
+DB_PATH = Path(__file__).resolve().parent / "pro_strom.db"
 
 
 # =========================
@@ -93,11 +94,17 @@ with st.form("add_form"):
 # -------------------------
 st.subheader("Gespeicherte Geräte")
 
+st.write("cwd:", Path.cwd())
+st.write("db path:", DB_PATH)
+st.write("db exists:", Path(DB_PATH).exists())
+
 df = get_appliances()
 
 if df.empty:
     st.info("Keine Geräte gespeichert")
 else:
+    st.dataframe(df)
+
     for _, row in df.iterrows():
         col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
 
