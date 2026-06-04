@@ -1,8 +1,29 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
+import requests
 from datetime import datetime
 from pathlib import Path
+
+url = "https://api.awattar.de/v1/marketdata"
+response = requests.get(url)
+
+data = response.json()
+
+prices_df = pd.DataFrame(data["data"])
+if not prices_df.empty:
+    if "start" not in prices_df.columns and "start_timestamp" in prices_df.columns:
+        prices_df["start"] = pd.to_datetime(prices_df["start_timestamp"], unit="ms")
+
+    if "start" in prices_df.columns:
+        prices_df = prices_df.set_index("start")
+
+    if "price_ct" in prices_df.columns:
+        st.line_chart(prices_df["price_ct"])
+    elif "marketprice" in prices_df.columns:
+        st.line_chart(prices_df["marketprice"])
+    else:
+        st.error("Price data is missing expected columns.")
 
 # =========================
 # CONFIG
