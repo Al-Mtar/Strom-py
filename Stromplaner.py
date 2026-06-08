@@ -69,8 +69,130 @@ def init_db():
     )
     """)
 
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS price_history (
+        start_ts INTEGER PRIMARY KEY,
+        start_iso TEXT NOT NULL,
+        date TEXT NOT NULL,
+        weekday INTEGER NOT NULL,
+        hour INTEGER NOT NULL,
+        price_ct REAL NOT NULL,
+        price_eur REAL NOT NULL
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS recommendation_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        appliance_name TEXT NOT NULL,
+        power_kw REAL NOT NULL,
+        runtime_h REAL NOT NULL,
+        start_ts INTEGER NOT NULL,
+        end_ts INTEGER NOT NULL,
+        start_iso TEXT NOT NULL,
+        end_iso TEXT NOT NULL,
+        estimated_cost REAL NOT NULL,
+        computed_at TEXT NOT NULL
+    )
+    """)
+
     con.commit()
     con.close()
+
+
+def store_price_history(df):
+    if df.empty:
+        return
+
+    con = get_conn()
+    cur = con.cursor()
+    for idx, row in df.iterrows():
+        start_ts = int(idx.timestamp())
+        cur.execute(
+            "INSERT OR IGNORE INTO price_history (start_ts, start_iso, date, weekday, hour, price_ct, price_eur) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                start_ts,
+                idx.isoformat(),
+                idx.date().isoformat(),
+                idx.weekday(),
+                idx.hour,
+                float(row["price_ct"]),
+                float(row["price_eur"]),
+            ),
+        )
+    con.commit()
+    con.close()
+
+
+def store_recommendation(appliance_name, power_kw, runtime_h, start_time, end_time, estimated_cost):
+    if start_time is None or estimated_cost is None:
+        return
+
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute(
+        "INSERT INTO recommendation_history (appliance_name, power_kw, runtime_h, start_ts, end_ts, start_iso, end_iso, estimated_cost, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            appliance_name,
+            power_kw,
+            runtime_h,
+            int(start_time.timestamp()),
+            int(end_time.timestamp()),
+            start_time.isoformat(),
+            end_time.isoformat(),
+            estimated_cost,
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    con.commit()
+    con.close()
+
+
+def get_average_price_per_weekday():
+    con = get_conn()
+    df = pd.read_sql(
+        "SELECT weekday, AVG(price_eur) AS avg_price FROM price_history GROUP BY weekday ORDER BY weekday",
+        con,
+    )
+    con.close()
+    if df.empty:
+        return df
+
+    weekday_names = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
+    df["weekday_name"] = df["weekday"].apply(lambda w: weekday_names[w])
+    return df
+
+
+def get_recent_recommendations(limit=5):
+    con = get_conn()
+    df = pd.read_sql(
+        "SELECT appliance_name, power_kw, runtime_h, start_iso, end_iso, estimated_cost, computed_at FROM recommendation_history ORDER BY id DESC LIMIT ?",
+        con,
+        params=(limit,),
+    )
+    con.close()
+    return df
+
+
+def find_cheapest_window_for_today(price_df, power_kw, runtime_h):
+    if price_df.empty or runtime_h <= 0:
+        return None, None
+
+    now = pd.Timestamp.now(tz=LOCAL_TZ)
+    today_end = now.normalize() + pd.Timedelta(days=1)
+    latest_start = today_end - pd.Timedelta(hours=runtime_h)
+    candidate = price_df[(price_df.index >= now) & (price_df.index <= latest_start)]
+    if candidate.empty:
+        return None, None
+
+    return find_cheapest_start(candidate, power_kw, runtime_h, earliest=now)
+
+
+def format_time_slot(start_time, runtime_h):
+    if start_time is None:
+        return "-"
+    end_time = start_time + pd.Timedelta(hours=runtime_h)
+    return f"{start_time.strftime('%H:%M')}–{end_time.strftime('%H:%M')}"
 
 
 # =========================
@@ -151,6 +273,7 @@ init_db()
 st.title("⚡EnergiX Planner⚡")
 
 prices_df = fetch_market_data()
+store_price_history(prices_df)
 if not prices_df.empty:
     st.subheader("Strompreisverlauf")
     st.line_chart(prices_df["price_eur"])
@@ -167,6 +290,43 @@ if not prices_df.empty:
             f"Günstigster verfügbarer Startzeitraum (1 Std.): {best_one_hour.strftime('%d.%m.%Y %H:%M')} — "
             f"{(best_one_hour + pd.Timedelta(hours=1)).strftime('%H:%M')} ({best_price:.2f} €/kWh)"
         )
+
+    st.subheader("Beste Waschmaschinen-Zeit heute")
+    washing_power = 2.0
+    washing_runtime = st.number_input("Waschdauer heute (h)", 0.5, 4.0, 1.5, step=0.5)
+    best_start, best_cost = find_cheapest_window_for_today(prices_df, washing_power, washing_runtime)
+    if best_start is not None and best_cost is not None:
+        end_time = best_start + pd.Timedelta(hours=washing_runtime)
+        st.success(
+            f"Empfohlene Zeit: {format_time_slot(best_start, washing_runtime)} — geschätzte Kosten: {best_cost:.2f} €"
+        )
+        store_recommendation(
+            "Waschmaschine",
+            washing_power,
+            washing_runtime,
+            best_start,
+            end_time,
+            best_cost,
+        )
+    else:
+        st.warning("Keine passende Waschmaschine-Zeit heute gefunden.")
+
+    st.subheader("Historische Preis-Analytics")
+    avg_prices = get_average_price_per_weekday()
+    if not avg_prices.empty:
+        avg_prices = avg_prices.set_index("weekday_name")
+        st.bar_chart(avg_prices["avg_price"])
+        st.table(avg_prices[["avg_price"]].rename(columns={"avg_price": "Durchschnittlicher Strompreis (€/kWh)"}))
+    else:
+        st.info("Noch keine historische Preisdaten gespeichert.")
+
+    st.subheader("Letzte Empfehlungen")
+    recent_recommendations = get_recent_recommendations(limit=5)
+    if not recent_recommendations.empty:
+        recent_recommendations["estimated_cost"] = recent_recommendations["estimated_cost"].map(lambda v: f"{v:.2f} €")
+        st.table(recent_recommendations)
+    else:
+        st.info("Noch keine Empfehlungen gespeichert.")
 else:
     st.error("Preis-Daten konnten nicht angezeigt werden.")
 
