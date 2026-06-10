@@ -265,6 +265,38 @@ def find_cheapest_start(price_df, power_kw, runtime_h, earliest=None):
     return best_start, best_cost
 
 
+def get_dresden_consumption():
+    # Ungefähre Koordinaten Dresdner Stadtteile mit geschätztem
+    # täglichem Stromverbrauch (MWh) – dient als Demo-Datensatz.
+    data = [
+        ("Altstadt", 51.0493, 13.7381, 480),
+        ("Neustadt", 51.0660, 13.7460, 360),
+        ("Striesen", 51.0430, 13.7900, 290),
+        ("Blasewitz", 51.0540, 13.8060, 250),
+        ("Plauen", 51.0260, 13.7080, 210),
+        ("Löbtau", 51.0420, 13.6960, 230),
+        ("Pieschen", 51.0830, 13.7270, 240),
+        ("Klotzsche", 51.1230, 13.7790, 180),
+        ("Prohlis", 50.9990, 13.7990, 320),
+        ("Cotta", 51.0560, 13.6700, 200),
+        ("Leuben", 51.0140, 13.8290, 160),
+        ("Gruna", 51.0330, 13.7860, 190),
+    ]
+    df = pd.DataFrame(data, columns=["district", "lat", "lon", "consumption_mwh"])
+
+    lo, hi = df["consumption_mwh"].min(), df["consumption_mwh"].max()
+
+    def to_color(value):
+        t = (value - lo) / (hi - lo) if hi > lo else 0.0
+        red = int(60 + t * 195)    # niedrig -> grünlich, hoch -> rot
+        green = int(170 - t * 140)
+        return f"#{red:02x}{green:02x}40"
+
+    df["color"] = df["consumption_mwh"].apply(to_color)
+    df["size"] = df["consumption_mwh"] * 4   # Radius in Metern
+    return df
+
+
 # =========================
 # STREAMLIT UI
 # =========================
@@ -329,6 +361,24 @@ if not prices_df.empty:
         st.info("Noch keine Empfehlungen gespeichert.")
 else:
     st.error("Preis-Daten konnten nicht angezeigt werden.")
+
+# -------------------------
+# DRESDEN CONSUMPTION MAP
+# -------------------------
+st.subheader("🗺️ Stromverbrauch in Dresden")
+st.caption(
+    "Geschätzter täglicher Stromverbrauch je Stadtteil (MWh). "
+    "Punktgröße und Farbe skalieren mit dem Verbrauch (grün = niedrig, rot = hoch)."
+)
+dresden_df = get_dresden_consumption()
+st.map(dresden_df, latitude="lat", longitude="lon", size="size", color="color", zoom=10)
+st.dataframe(
+    dresden_df[["district", "consumption_mwh"]]
+    .rename(columns={"district": "Stadtteil", "consumption_mwh": "Verbrauch (MWh/Tag)"})
+    .sort_values("Verbrauch (MWh/Tag)", ascending=False),
+    hide_index=True,
+    use_container_width=True,
+)
 
 # -------------------------
 # ADD DEVICE
