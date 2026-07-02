@@ -594,8 +594,26 @@ with st.expander("🗺️ Stromverbrauch in Dresden", expanded=False):
 
     st.subheader("🔥 Günstigste Zeit für ein Gerät in jedem Stadtteil")
     st.caption("Hier siehst du pro Stadtteil die beste Startzeit für ein Gerät wie Herd oder Ofen, damit du Stromkosten sparen kannst.")
-    appliance_power = st.number_input("Leistung des Geräts (kW)", 0.5, 10.0, 2.2, step=0.1)
-    appliance_runtime = st.number_input("Betriebsdauer (h)", 0.5, 4.0, 1.5, step=0.5)
+    st.session_state.setdefault("selected_device_power_kw", 2.2)
+    st.session_state.setdefault("selected_device_runtime_h", 1.5)
+    if "selected_device_name" in st.session_state and st.session_state["selected_device_name"]:
+        st.caption(f"Ausgewähltes Gerät: {st.session_state['selected_device_name']}")
+    appliance_power = st.number_input(
+        "Leistung des Geräts (kW)",
+        0.5,
+        10.0,
+        value=st.session_state.get("selected_device_power_kw", 2.2),
+        step=0.1,
+        key="appliance_power_input_widget",
+    )
+    appliance_runtime = st.number_input(
+        "Betriebsdauer (h)",
+        0.5,
+        4.0,
+        value=st.session_state.get("selected_device_runtime_h", 1.5),
+        step=0.5,
+        key="appliance_runtime_input_widget",
+    )
 
     if not prices_df.empty:
         price_source_df = analysis_prices_df if "analysis_prices_df" in locals() and not analysis_prices_df.empty else prices_df
@@ -670,31 +688,31 @@ with st.expander("🌍 Lebenserwartung nach Kontinenten", expanded=False):
         st.info("Keine Daten für die ärmsten Länder verfügbar.")
 
 # -------------------------
-# DRESDEN CONSUMPTION MAP
-# -------------------------
-st.subheader("🗺️ Stromverbrauch in Dresden")
-st.caption(
-    "Geschätzter täglicher Stromverbrauch je Stadtteil (MWh). "
-    "Punktgröße und Farbe skalieren mit dem Verbrauch (grün = niedrig, rot = hoch)."
-)
-dresden_df = get_dresden_consumption()
-st.map(dresden_df, latitude="lat", longitude="lon", size="size", color="color", zoom=10)
-st.dataframe(
-    dresden_df[["district", "consumption_mwh"]]
-    .rename(columns={"district": "Stadtteil", "consumption_mwh": "Verbrauch (MWh/Tag)"})
-    .sort_values("Verbrauch (MWh/Tag)", ascending=False),
-    hide_index=True,
-    use_container_width=True,
-)
-
-# -------------------------
 # ADD DEVICE
 # -------------------------
 with st.expander("🔧 Geräteverwaltung", expanded=False):
     st.subheader("Gerät hinzufügen")
 
     with st.form("add_form"):
-        name = st.text_input("Name")
+        appliance_options = [
+            "Waschmaschine",
+            "Geschirrspüler",
+            "Wäschetrockner",
+            "Elektroherd",
+            "Wallbox (E-Auto laden)",
+            "Elektroheizung",
+            "Klimaanlage",
+            "Warmwasserboiler",
+            "Staubsauger",
+            "Bügeleisen",
+            "Andere",
+        ]
+        selected_appliance = st.selectbox("Name", appliance_options, index=0)
+        custom_name = ""
+        if selected_appliance == "Andere":
+            custom_name = st.text_input("Eigener Gerätename")
+
+        name = custom_name if selected_appliance == "Andere" else selected_appliance
         power = st.number_input("Leistung (kW)", 0.1, 10.0, 2.0)
         runtime = st.number_input("Laufzeit (h)", 0.1, 24.0, 1.0)
 
@@ -717,16 +735,47 @@ with st.expander("🔧 Geräteverwaltung", expanded=False):
     if df.empty:
         st.info("Keine Geräte gespeichert")
     else:
+        device_labels = []
+        device_lookup = {}
         for _, row in df.iterrows():
-            col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+            label = f"{row['name']} — {row['power_kw']} kW · {row['runtime_h']} h"
+            device_labels.append(label)
+            device_lookup[label] = row
 
-            col1.write(row["name"])
-            col2.write(f"{row['power_kw']} kW")
-            col3.write(f"{row['runtime_h']} h")
+        default_index = 0
+        if st.session_state.get("selected_device_name"):
+            for idx, label in enumerate(device_labels):
+                if label.startswith(st.session_state["selected_device_name"]):
+                    default_index = idx
+                    break
 
-            if col4.button("🗑️", key=f"del_{row['id']}"):
-                delete_appliance(row["id"])
-                st.rerun()
+        selected_label = st.radio(
+            "Geräte auswählen",
+            options=device_labels,
+            index=default_index,
+            key="device_radio",
+            horizontal=False,
+        )
+        selected_row = device_lookup[selected_label]
+        st.session_state["selected_device_id"] = int(selected_row["id"])
+        st.session_state["selected_device_name"] = selected_row["name"]
+        st.session_state["selected_device_power_kw"] = float(selected_row["power_kw"])
+        st.session_state["selected_device_runtime_h"] = float(selected_row["runtime_h"])
+
+        st.info(f"Ausgewählt: {selected_row['name']} · {selected_row['power_kw']} kW · {selected_row['runtime_h']} h")
+
+        col_del, col_use = st.columns([1, 1])
+        if col_del.button("🗑️ Ausgewähltes Gerät löschen", use_container_width=True):
+            delete_appliance(int(selected_row["id"]))
+            st.session_state.pop("selected_device_name", None)
+            st.session_state.pop("selected_device_power_kw", None)
+            st.session_state.pop("selected_device_runtime_h", None)
+            st.rerun()
+
+        if col_use.button("🔄 Werte übernehmen", use_container_width=True):
+            st.session_state["selected_device_power_kw"] = float(selected_row["power_kw"])
+            st.session_state["selected_device_runtime_h"] = float(selected_row["runtime_h"])
+            st.rerun()
 
         if not prices_df.empty:
             st.subheader("Kostenberechnung & günstigste Startzeit")
