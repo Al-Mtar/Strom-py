@@ -5,6 +5,7 @@ import requests
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from ui import render_dashboard
 
 AWATTAR_URL = "https://api.awattar.de/v1/marketdata"
 DB_PATH = Path(__file__).resolve().parent / "pro_strom.db"
@@ -498,6 +499,9 @@ with st.expander("🌦️ Wetter weltweit", expanded=False):
             st.warning("Für diese Stadt wurden keine Wetterdaten gefunden.")
 
 prices_df = fetch_market_data()
+with st.expander("📊 Modernes Smart Energy Dashboard", expanded=False):
+    render_dashboard(prices_df)
+
 store_price_history(prices_df)
 with st.expander("⚡ Strompreise und Empfehlungen", expanded=False):
     if not prices_df.empty:

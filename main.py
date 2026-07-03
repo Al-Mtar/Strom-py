@@ -1,5 +1,4 @@
-import streamlit as st 
-import requests 
+import Stromplaner  # noqa: F401
 st.title("Mein projekt startet")
 
 url = "https://api.open-meteo.com/v1/forecast"
